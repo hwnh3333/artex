@@ -128,3 +128,20 @@ sqlite3 state/redteam/knowledge.db \
 - `ubuntu-latest` 约 14GB 可用磁盘，本镜像峰值约 5GB，能构建；job 超时设了 60 分钟。
 - 资产更新后（例如换知识库）重新打包、重新上传、更新 SHA256 即可。
 
+### 9.4 直接用 GHCR 镜像运行
+
+仓库里没有 `artex-amd64` / `redteam/` / `nuclei-templates/` 这些大文件，**不要**在仓库里直接 `docker compose up --build`。用构建好的镜像：
+
+```bash
+docker pull ghcr.io/hwnh3333/artex:latest
+cp .env.example .env
+# 编辑 .env：
+#   POSTGRES_PASSWORD=改成强密码
+#   ARTEX_IMAGE=ghcr.io/hwnh3333/artex
+#   ARTEX_TAG=latest
+docker compose pull artex
+docker compose up -d --no-build
+```
+
+镜像地址：`ghcr.io/hwnh3333/artex:latest`
+
