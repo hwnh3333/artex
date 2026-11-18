@@ -113,7 +113,7 @@ sqlite3 state/redteam/knowledge.db \
 
 ### 9.2 运行
 
-仓库 **Actions → build-docker → Run workflow**。首次构建会：
+推送到 `main` 会自动触发；也可以在仓库 **Actions → build-docker → Run workflow** 手动触发。首次构建会：
 
 1. 下载并校验 Release 资产；
 2. `docker buildx build --platform linux/amd64 --push`；
