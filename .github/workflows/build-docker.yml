@@ -45,7 +45,8 @@ jobs:
             -o /tmp/artex-redteam-assets.tar.gz "$ASSET_URL"
           echo "$ASSET_SHA256  /tmp/artex-redteam-assets.tar.gz" | sha256sum -c -
           tar -xzf /tmp/artex-redteam-assets.tar.gz -C .
-          test -x ./artex-amd64
+          test -f ./artex-amd64
+          chmod +x ./artex-amd64
           test -f ./redteam/knowledge.db
           test -d ./redteam/toolkit/nuclei
           test -d ./redteam/pocs
