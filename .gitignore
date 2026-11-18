@@ -1,0 +1,30 @@
+# 方案 A：大文件不进 Git，统一放 GitHub Release 资产
+artex
+artex-arm64
+artex-amd64
+nuclei-templates/
+redteam/knowledge.db
+redteam/pocs/
+redteam/toolkit/
+redteam/runs/
+redteam/patches/
+redteam/.env
+redteam/*.bak-*
+redteam/merge-spinach-report.json
+redteam/INSTALL-NOTES.md
+redteam/restore-tools.sh
+state/
+*.tar.gz
+*.tgz
+*.tar.zst
+*.7z
+*.zip
+
+# 本地/运行态
+.env
+*.log
+skills.bak-*
+jwt.key
+.venv/
+__pycache__/
+.tool-dl/

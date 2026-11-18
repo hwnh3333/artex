@@ -1,0 +1,23 @@
+# 构建上下文只保留运行镜像需要的文件。
+.git
+.gitignore
+state/
+.tool-dl/
+*.tar.gz
+*.tgz
+*.7z
+*.zip
+*.log
+artex
+artex-arm64
+skills.bak-*
+redteam/*.bak-*
+redteam/patches/
+redteam/toolkit.old/
+redteam/toolkit/runs/
+redteam/toolkit/vps/id_rsa*
+redteam/toolkit/vps/rt-tunnel-key*
+redteam/.env
+redteam/merge-spinach-report.json
+redteam/INSTALL-NOTES.md
+redteam/restore-tools.sh

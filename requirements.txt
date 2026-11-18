@@ -1,0 +1,5 @@
+# Docker 构建期安装的 Python 工具。netexec 不在 PyPI，由 Dockerfile 单独从 GitHub 安装。
+impacket==0.13.1
+pypykatz
+sqlmap==1.10.11
+dirsearch==0.5.0

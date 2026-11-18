@@ -1,0 +1,5 @@
+{
+  "_comment": "Docker 部署可选用：ARTEX_CONFIG=/state/config.json。当前 compose 用 ARTEX_PG_DSN 与 ARTEX_KB_DIR，不需要此文件。",
+  "knowledge_dir": "/state/redteam",
+  "skill_dir": "/state/skills"
+}
