@@ -61,6 +61,9 @@ COPY requirements.txt /app/requirements.txt
 COPY README-linux.txt /app/README-linux.txt
 COPY skills/ /app/skills/
 COPY redteam/ /app/redteam/
+# Release 资产里的 redteam/skills 仍是官方单模式旧版；用仓库内双模式版覆盖，
+# 保证镜像内两份 fofa-recon 都是“默认官方、设 FOFA_POOL_BASE 才走号池”。
+COPY skills/fofa-recon.md /app/redteam/skills/fofa-recon.md
 COPY nuclei-templates/ /app/redteam/nuclei-templates/
 
 # Python 工具装进镜像内 venv；不依赖运行时联网。

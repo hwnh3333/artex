@@ -1,58 +1,88 @@
 ---
 name: fofa-recon
-description: 用 FOFA API 批量测绘目标资产（域名/IP/端口/标题/指纹）；内置限速客户端，严格单线程 + 最小间隔 + 退避重试，避免触发 45012
-whenToUse: 信息收集阶段拿到单位名/域名/证书等标识、需要铺开互联网资产面、且已配 FOFA key 时（宽泛语句先叠 domain=/cert=/org= 收窄）
+description: 用 FOFA 测绘目标资产；默认官方 API，配置 FOFA_POOL_BASE 后自动切换第三方号池
+whenToUse: 信息收集阶段拿到单位名/域名/证书等标识、需要铺开互联网资产面、且已配 FOFA key 或号池令牌时
 role: recon
 enabled: true
 ---
+> **默认官方 API**：不设 `FOFA_POOL_BASE` 时，走 `https://fofa.info/api/v1/search/all`，`FOFA_KEY` 填官方 key。
+> **第三方号池**：只有设置 `FOFA_POOL_BASE` 才切换；例如 `FOFA_POOL_BASE=https://fofa.ssgonet.com`，此时 `FOFA_KEY` 填号池令牌。
+> 官方兼容镜像：可设 `FOFA_API_BASE=https://镜像域名`，仍走官方协议。
 
-# FOFA 资产测绘（限速安全版）
+# FOFA 资产测绘
 
-## 凭据
-- API Key：从环境变量 `FOFA_KEY` 读取（**任何 key 都不要写进仓库**；脚本读环境变量，并自动兜底加载 `$DSH_HOME/.env`——宿主子进程会清洗 KEY 类变量，所以 key 落 .env 最稳）
-- 接口：`GET https://fofa.info/api/v1/search/all`
-- 参数：`key`、`qbase64`（查询语句的 base64）、`size`、`page`、`fields`
+## 模式与凭据
 
-## 官方限额（fofa.info/vip，2026-09 核对）
-
-| 会员 | 查询请求 | 获取数据量 | **查询接口并发** |
+| 模式 | 触发条件 | 接口 | FOFA_KEY |
 |---|---|---|---|
-| 注册用户（免费） | 无 API（页面 300 次/月） | 页面 3,000 条/月 | — |
-| 个人版 | 10,000 次/月 | 100,000 条/月 | **1 秒 1 次** |
-| 专业版 | 80,000 次/月 | 800,000 条/月 | **1 秒 1 次** |
-| 商业版 | 900,000 次/月 | 9,000,000 条/月 | **1 秒 2 次** |
-| 企业版 V2 | 5,000,000 次/月 | 50,000,000 条/月 | **1 秒 5 次** |
+| 官方（默认） | 未设置 `FOFA_POOL_BASE` | `GET {FOFA_API_BASE}/api/v1/search/all` | 官方 API key |
+| 第三方号池 | 设置 `FOFA_POOL_BASE` | `POST {FOFA_POOL_BASE}/api/search` | 号池令牌 |
 
-## 实测行为（实测验证）
-- 连续快速请求 → **HTTP 429**，响应体 `{"error":true,"errmsg":"[45012] 请求速度过快"}`
-- key 错误 → HTTP 200 + `{"error":true,"errmsg":"[-700] 账号无效"}`
-- 单页 `size` 到 1000 正常；请求间隔 ≥1 秒时连续请求均返回 200
-- 结论：**按 1 请求/秒 保守执行，绝不并发**；遇到 45012 必须退避，不要立即重试
+变量写在 `/state/redteam/.env`：
 
-## 使用纪律（重要）
-1. **精确查询优先**：`domain=` / `cert=` / `org=` 先缩小范围，再考虑 `body=` / `title=` 等宽泛语句。宽语句返回几十万条没意义，还烧配额。
-2. **不要全量翻页**：默认只取前 1–3 页（每页 100 条）拿到测绘入口即可。
-3. **单进程单线程**：同一时刻只跑一个采集任务；多个查询串行排队。
-4. **结果落盘缓存**：同一查询不要重复拉，先看 `runs/fofa-*.jsonl` 是否已有。
-5. **长任务放后台**：用 `run_in_background` 跑，别阻塞对话。
-6. 配额耗尽或被限速时改用其他数据源（证书透明、DNS、搜索引擎），不要死磕。
-
-## 限速客户端（用这个，不要手写 curl 循环）
 ```bash
-cat > runs/fofa_client.py <<'PY'
+FOFA_KEY=...
+# 可选：官方兼容镜像
+# FOFA_API_BASE=https://镜像域名
+# 可选：第三方号池；不写就是官方
+# FOFA_POOL_BASE=https://fofa.ssgonet.com
+```
+
+号池限制：
+
+- `size` 2~50；
+- `page*size <= 60`；
+- 每次搜索消耗 1 次号池额度；
+- `401` 令牌无效、`403` 额度用完、`429` 限速、`502` 多为 `page*size>60`。
+
+## 使用纪律
+
+1. 先用 `domain=` / `cert=` / `org=` 收窄，不要直接跑宽泛的 `title="login"`。
+2. 官方按 1 请求/秒保守执行；号池也保持至少 1 秒间隔。
+3. 号池单次查询最多 60 条：默认 `--size 50 --pages 1`，要 60 条用 `--size 10 --pages 6`。
+4. 结果缓存在 `/state/redteam/runs/fofa-*.jsonl`，同一查询先看缓存。
+5. 按 `(ip, port)` 去重后再写入资产表。
+
+## 客户端
+
+```bash
+cat > /state/redteam/runs/fofa_client.py <<'PY'
 #!/usr/bin/env python3
-"""FOFA 采集（限速安全）：单线程 + 最小间隔 + 指数退避 + 结果缓存。
+"""FOFA 采集：默认官方 API；设置 FOFA_POOL_BASE 后切第三方号池。
+
+模式：
+- 默认（未设置 FOFA_POOL_BASE）：
+  GET  {FOFA_API_BASE:-https://fofa.info}/api/v1/search/all
+  参数 key / qbase64 / size / page / fields
+- 第三方（设置 FOFA_POOL_BASE）：
+  POST {FOFA_POOL_BASE}/api/search
+  Header X-API-Key，JSON {query,page,size}
 
 用法:
-  python3 runs/fofa_client.py 'domain="example.com"' --pages 2 --size 100 --interval 2.0
+  python3 fofa_client.py 'domain="example.com"'
+  python3 fofa_client.py 'domain="example.com"' --pages 2 --size 100
+  FOFA_POOL_BASE=https://fofa.ssgonet.com python3 fofa_client.py 'domain="example.com"' --pages 1 --size 50
 输出:
-  runs/fofa-<slug>.jsonl   每行一个资产 {host,ip,port,title,domain,server,protocol}
+  /state/redteam/runs/fofa-<slug>.jsonl
 """
-import argparse, base64, hashlib, json, os, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse
+import base64
+import hashlib
+import json
+import os
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEFAULT_OFFICIAL_BASE = "https://fofa.info"
+FIELDS = "host,ip,port,title,domain,server,protocol"
+RETRY_DELAYS = [2, 5, 10]
 
 
 def _load_dsh_env():
-    """$DSH_HOME/.env 兜底加载：宿主子进程会清洗 KEY/TOKEN 类环境变量，测绘 key 只落在这个文件里。"""
+    """/state/redteam/.env 兜底加载：宿主子进程会清洗 KEY/TOKEN 类环境变量。"""
     home = os.environ.get("DSH_HOME") or os.path.join(os.path.expanduser("~"), ".dsh")
     try:
         with open(os.path.join(home, ".env"), encoding="utf-8") as fh:
@@ -61,107 +91,182 @@ def _load_dsh_env():
                 if not line or line.startswith("#") or "=" not in line:
                     continue
                 k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip().strip("\x27").strip("\x22"))
+                os.environ.setdefault(k.strip(), v.strip().strip("'").strip('"'))
     except OSError:
         pass
+
+
 _load_dsh_env()
 
-KEY = os.environ["FOFA_KEY"]
-API = "https://fofa.info/api/v1/search/all"
-FIELDS = "host,ip,port,title,domain,server,protocol"
-RETRY_BACKOFF = [5, 15, 45]          # 遇 45012 的退避秒数
-HARD_BUDGET = 30                      # 单次运行最多请求次数
+KEY = os.environ.get("FOFA_KEY", "").strip()
+POOL_BASE = (os.environ.get("FOFA_POOL_BASE") or "").strip().rstrip("/")
+OFFICIAL_BASE = (os.environ.get("FOFA_API_BASE") or DEFAULT_OFFICIAL_BASE).strip().rstrip("/")
+MODE = "pool" if POOL_BASE else "official"
+BASE = POOL_BASE if MODE == "pool" else OFFICIAL_BASE
 
 
-def fetch(query, page, size, timeout=30):
-    qs = urllib.parse.urlencode({
-        "key": KEY, "qbase64": base64.b64encode(query.encode()).decode(),
-        "size": size, "page": page, "fields": FIELDS,
-    })
-    req = urllib.request.Request(API + "?" + qs, headers={"User-Agent": "redteam-recon/1.0"})
+def request_json(req, timeout):
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, json.load(r)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "ignore")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, json.load(resp)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "ignore")
         try:
-            return e.code, json.loads(body)
+            return exc.code, json.loads(raw)
         except Exception:
-            return e.code, {"error": True, "errmsg": body[:200]}
+            return exc.code, {"error": True, "errmsg": raw[:200]}
+    except Exception as exc:
+        return 0, {"error": True, "errmsg": f"{type(exc).__name__}: {exc}"}
+
+
+def fetch_official(query, page, size, timeout=30):
+    qs = urllib.parse.urlencode({
+        "key": KEY,
+        "qbase64": base64.b64encode(query.encode()).decode(),
+        "size": size,
+        "page": page,
+        "fields": FIELDS,
+    })
+    req = urllib.request.Request(
+        OFFICIAL_BASE + "/api/v1/search/all?" + qs,
+        headers={"User-Agent": "redteam-recon/1.0"},
+    )
+    return request_json(req, timeout)
+
+
+def fetch_pool(query, page, size, timeout=30):
+    body = json.dumps({"query": query, "page": page, "size": size}).encode("utf-8")
+    req = urllib.request.Request(
+        POOL_BASE + "/api/search",
+        data=body,
+        method="POST",
+        headers={
+            "X-API-Key": KEY,
+            "Content-Type": "application/json",
+            "User-Agent": "redteam-recon-pool/1.0",
+        },
+    )
+    return request_json(req, timeout)
+
+
+def is_retryable(data):
+    if not isinstance(data, dict):
+        return False
+    if MODE == "official":
+        return bool(data.get("error")) and "45012" in str(data.get("errmsg") or "")
+    return data.get("code") == 429
+
+
+def extract_assets(data):
+    if MODE == "official":
+        rows = data.get("results") or []
+        fields = data.get("fields") or FIELDS.split(",")
+        assets = []
+        for row in rows:
+            if isinstance(row, dict):
+                assets.append(row)
+            elif isinstance(row, (list, tuple)):
+                assets.append(dict(zip(fields, row)))
+        return assets
+    return data.get("assets") or []
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("query")
-    ap.add_argument("--pages", type=int, default=2, help="最多翻页数（默认 2）")
-    ap.add_argument("--size", type=int, default=100, help="每页条数（默认 100，不要调大）")
-    ap.add_argument("--interval", type=float, default=2.0, help="请求最小间隔秒（默认 2.0）")
+    ap.add_argument("--pages", type=int, default=None, help="页数；官方默认 2，号池默认 1")
+    ap.add_argument("--size", type=int, default=None, help="每页条数；官方默认 100，号池默认 50")
+    ap.add_argument("--interval", type=float, default=1.0, help="请求最小间隔秒，默认 1.0")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
 
+    if not KEY:
+        print("[stop] 未找到 FOFA_KEY", file=sys.stderr)
+        return 2
+
+    if MODE == "pool":
+        size = args.size if args.size is not None else 50
+        pages = args.pages if args.pages is not None else 1
+        if not (2 <= size <= 50):
+            print("[stop] 号池 --size 必须在 2..50", file=sys.stderr)
+            return 2
+        max_pages = 60 // size
+        if pages > max_pages:
+            print(f"[warn] 号池 page*size 不能超过 60，--pages 从 {pages} 收到 {max_pages}", file=sys.stderr)
+            pages = max_pages
+    else:
+        size = args.size if args.size is not None else 100
+        pages = args.pages if args.pages is not None else 2
+        if size <= 0 or pages <= 0:
+            print("[stop] --size / --pages 必须大于 0", file=sys.stderr)
+            return 2
+
+    print(f"[mode] {MODE} base={BASE}", file=sys.stderr)
+
     slug = hashlib.md5(args.query.encode()).hexdigest()[:8]
-    out = args.out or f"runs/fofa-{slug}.jsonl"
+    out = args.out or f"/state/redteam/runs/fofa-{slug}.jsonl"
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
 
     if os.path.exists(out) and os.path.getsize(out) > 0:
         print(f"[cache] {out} 已存在（{os.path.getsize(out)} bytes），如需重拉请先删除", file=sys.stderr)
         return 0
 
-    seen, rows, requests_made, last_ts = set(), [], 0, 0.0
-    for page in range(1, args.pages + 1):
-        # ---- 限速：保证两次请求之间至少间隔 interval 秒 ----
-        wait = args.interval - (time.time() - last_ts)
-        if wait > 0:
-            time.sleep(wait)
-
-        status, data = None, None
-        for attempt, backoff in enumerate([0] + RETRY_BACKOFF):
-            if attempt:
-                print(f"[backoff] 等待 {backoff}s 后重试 (page={page})", file=sys.stderr)
-                time.sleep(backoff)
+    rows = 0
+    last_ts = 0.0
+    with open(out, "w", encoding="utf-8") as fh:
+        for page in range(1, pages + 1):
+            wait = args.interval - (time.time() - last_ts)
+            if wait > 0:
+                time.sleep(wait)
             last_ts = time.time()
-            requests_made += 1
-            if requests_made > HARD_BUDGET:
-                print(f"[stop] 达到请求预算 {HARD_BUDGET}", file=sys.stderr)
-                break
-            status, data = fetch(args.query, page, args.size)
-            if status == 200 and not data.get("error"):
-                break
-            errmsg = str(data.get("errmsg", ""))
-            if "45012" in errmsg or status == 429:
-                continue                      # 限速 → 退避重试
-            print(f"[stop] 不可重试错误 http={status} {errmsg}", file=sys.stderr)
-            data = None
-            break
-        if data is None:
-            break
 
-        results = data.get("results") or []
-        print(f"[page {page}] {len(results)} 条 (size={data.get('size')}, 消耗F点={data.get('consumed_fpoint')})", file=sys.stderr)
-        for item in results:
-            if isinstance(item, str):
-                item = [item]
-            host = item[0] if len(item) > 0 else ""
-            ip = item[1] if len(item) > 1 else ""
-            port = item[2] if len(item) > 2 else ""
-            key = (host, ip, port)
-            if key in seen:
-                continue
-            seen.add(key)
-            rows.append({
-                "host": host, "ip": ip, "port": port,
-                "title": item[3] if len(item) > 3 else "",
-                "domain": item[4] if len(item) > 4 else "",
-                "server": item[5] if len(item) > 5 else "",
-                "protocol": item[6] if len(item) > 6 else "",
-            })
-        if len(results) < args.size:
-            break                              # 已到末页
+            status, data = 0, None
+            for attempt in range(len(RETRY_DELAYS) + 1):
+                if MODE == "pool":
+                    status, data = fetch_pool(args.query, page, size)
+                else:
+                    status, data = fetch_official(args.query, page, size)
+                if is_retryable(data) and attempt < len(RETRY_DELAYS):
+                    delay = RETRY_DELAYS[attempt]
+                    print(f"[retry] 限速，{delay}s 后重试", file=sys.stderr)
+                    time.sleep(delay)
+                    continue
+                break
 
-    with open(out, "w", encoding="utf-8") as f:
-        for row in rows:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    print(f"[done] {len(rows)} 条资产 → {out}（共 {requests_made} 次请求）", file=sys.stderr)
+            if not isinstance(data, dict):
+                print(f"[stop] page={page} HTTP={status} 非 JSON 响应", file=sys.stderr)
+                break
+
+            if MODE == "official":
+                if data.get("error"):
+                    print(
+                        f"[stop] page={page} HTTP={status} errmsg={data.get('errmsg')}",
+                        file=sys.stderr,
+                    )
+                    break
+                total = data.get("size")
+                remaining = "-"
+            else:
+                if data.get("code") != 0:
+                    print(
+                        f"[stop] page={page} HTTP={status} code={data.get('code')} "
+                        f"message={data.get('message') or data.get('msg')}",
+                        file=sys.stderr,
+                    )
+                    break
+                total = data.get("total")
+                remaining = data.get("remaining_today")
+
+            assets = extract_assets(data)
+            print(
+                f"[page {page}] total={total} remaining_today={remaining} assets={len(assets)}",
+                file=sys.stderr,
+            )
+            for asset in assets:
+                fh.write(json.dumps(asset, ensure_ascii=False) + "\n")
+            rows += len(assets)
+
+    print(f"[done] {out} rows={rows}", file=sys.stderr)
     return 0
 
 
@@ -170,31 +275,21 @@ if __name__ == "__main__":
 PY
 ```
 
-### 用法
+## 用法
+
 ```bash
-mkdir -p runs
-python3 runs/fofa_client.py 'domain="example.com"' --pages 2 --size 100 --interval 2.0
-python3 runs/fofa_client.py 'cert="example.com"' --pages 3 --interval 2.0
-python3 runs/fofa_client.py 'org="示例科技有限公司"' --pages 2 --interval 2.0
+# 默认官方
+python3 /state/redteam/runs/fofa_client.py 'domain="example.com"'
+
+# 官方镜像（同一个协议，只换 base）
+FOFA_API_BASE=https://镜像域名 python3 /state/redteam/runs/fofa_client.py 'domain="example.com"'
+
+# 第三方号池（在 .env 里设 FOFA_POOL_BASE 后，客户端自动切）
+python3 /state/redteam/runs/fofa_client.py 'domain="example.com"' --pages 1 --size 50
 ```
 
-### 落库
-读 `runs/fofa-*.jsonl`，逐条 `redteam_asset_add`：`provenance="passive"`、`tool="fofa"`，端口带 `url=host`、`title`、`product=server`；域名写进 `names`。
+结果：
 
-## 常用查询语句
-| 目的 | 语句 |
-|---|---|
-| 某域名全部资产 | `domain="example.com"` |
-| 证书包含该域名 | `cert="example.com"` |
-| 某 C 段 | `ip="203.0.113.0/24"` |
-| 单位名称 | `org="示例科技有限公司"` |
-| 按标题找后台 | `title="admin" && domain="example.com"` |
-| 按 body 特征 | `body="/seeyon/"` |
-| 指定端口 | `ip="203.0.113.0/24" && port="3306"` |
-| 按 favicon 哈希扩线 | `icon_hash="<mmh3>"`（哈希用技能 `infra-pivot` 的 `runs/favicon_hash.py` 计算） |
-
-> 宽泛语句（单独用 `body=` / `title=`）结果量大、消耗配额快，务必叠加域名或 IP 限定。
-
-> **检索词用英文技术串**（`host` / `title` / `body` / `cert` / `banner` 落库都是英文形态，中文词检索不到）；只有主体标识（单位全称/简称/品牌词，`org=` / `icp.name=`）才用中文。
-
-> 同源扩线完整流程（指纹提取 → 反查 → CDN 穿透 → 旁站）见技能 `infra-pivot`。
+```text
+/state/redteam/runs/fofa-<slug>.jsonl
+```
