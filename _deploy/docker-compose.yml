@@ -1,0 +1,84 @@
+name: artex-lw
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: artex-lw-pg
+    environment:
+      POSTGRES_USER: artex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在 .env 设置 POSTGRES_PASSWORD}
+      POSTGRES_DB: artex
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U artex -d artex"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    # 资源上限：防止 PostgreSQL/任务把 3.8G 小机器整体拖死。
+    mem_limit: ${ARTEX_PG_MEM_LIMIT:-384m}
+    memswap_limit: ${ARTEX_PG_MEM_LIMIT:-384m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  artex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: artex-lw:installed
+    container_name: artex-lw
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ARTEX_PG_DSN: postgres://artex:${POSTGRES_PASSWORD}@postgres:5432/artex?sslmode=disable
+      ARTEX_KB_DIR: /state/redteam
+      ARTEX_SKILL_DIR: /state/skills
+      ARTEX_CONFIG: /state/config.json
+      ARTEX_GATE: ${ARTEX_GATE:-off}
+      ARTEX_GATE_TOKEN: ${ARTEX_GATE_TOKEN:-}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: artex
+      PGDATABASE: artex
+      # defaults.sql 会 DELETE 现有拦截规则并启用“破甲”提示词，默认不自动执行。
+      # 需要时再显式改为 1，并先备份数据库。
+      APPLY_DEFAULTS: "${APPLY_DEFAULTS:-1}"
+      HOME: /state/home
+      DSH_HOME: /state/home/.dsh
+      ARTEX_HOME: /app
+      TZ: ${TZ:-Asia/Shanghai}
+    ports:
+      - "9787:8787"
+      - "127.0.0.1:9788:8788"
+    volumes:
+      - ./state:/state
+    # base 镜像的 /api/health 在 Gate 开启时会被假 nginx 页挡住；
+    # 这里只探测端口是否有 HTTP 响应，避免误判 unhealthy。
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8787/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 5
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+    # 只限制内存：不限制 CPU、PID、worker 数或任务并发。
+    # memswap_limit 与 mem_limit 相同，禁止容器额外吃宿主机 swap。
+    mem_limit: ${ARTEX_MEM_LIMIT:-1920m}
+    memswap_limit: ${ARTEX_MEM_LIMIT:-1920m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  pgdata:
